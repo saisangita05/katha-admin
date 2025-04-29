@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { listAll, ref, getDownloadURL } from "firebase/storage";
+import { listAll, ref, getDownloadURL, uploadBytesResumable } from "firebase/storage";
 import { collection, getDocs, doc, setDoc } from "firebase/firestore";
 import { db, storage } from "../../firebase";
 import "./dashboard.css";
@@ -11,10 +11,10 @@ const Dashboard = () => {
     const [webnovelCount, setWebnovelCount] = useState(0);
     const [comicsData, setComicsData] = useState([]);
     const [expandedComic, setExpandedComic] = useState(null);
-    const [expandedEpisode, setExpandedEpisode] = useState(null);
-    const [episodeTitle, setEpisodeTitle] = useState("");
+    const [expandedChapter, setExpandedChapter] = useState(null);
+    const [chapterTitle, setChapterTitle] = useState("");
     const [selectedComicId, setSelectedComicId] = useState(null);
-    const [isCreatingEpisode, setIsCreatingEpisode] = useState(false);
+    const [isCreatingChapter, setIsCreatingChapter] = useState(false);
 
     const findDocFilesRecursively = async (folderRef) => {
         const result = await listAll(folderRef);
@@ -30,35 +30,35 @@ const Dashboard = () => {
         return false;
     };
 
-    const fetchEpisodeImages = async (comicName, episodeNumber) => {
+    const fetchChapterImages = async (comicName, chapterNumber) => {
         try {
-            const episodePath = `${comicName}/Episode ${String(episodeNumber).padStart(2, "0")}`;
-            const episodeRef = ref(storage, episodePath);
-            const result = await listAll(episodeRef);
-            
+            const chapterPath = `${comicName}/Chapter ${String(chapterNumber).padStart(2, "0")}`;
+            const chapterRef = ref(storage, chapterPath);
+            const result = await listAll(chapterRef);
+
             const urls = await Promise.all(
                 result.items.map(async (item) => {
                     const url = await getDownloadURL(item);
                     return url;
                 })
             );
-            
-            return urls.sort(); // Sort URLs to ensure consistent order
+
+            return urls.sort();
         } catch (error) {
-            console.error("Error fetching episode images:", error);
+            console.error("Error fetching chapter images:", error);
             return [];
         }
     };
 
-    const handleCreateEpisode = async (comicId, comicName) => {
+    const handleCreateChapter = async (comicId, comicName) => {
         setSelectedComicId(comicId);
-        setIsCreatingEpisode(true);
-        setEpisodeTitle("");
+        setIsCreatingChapter(true);
+        setChapterTitle("");
     };
 
-    const handleSubmitEpisode = async () => {
-        if (!episodeTitle || !selectedComicId) {
-            alert("Please enter an episode title");
+    const handleSubmitChapter = async () => {
+        if (!chapterTitle || !selectedComicId) {
+            alert("Please enter a chapter title");
             return;
         }
 
@@ -66,39 +66,31 @@ const Dashboard = () => {
             const comic = comicsData.find(c => c.id === selectedComicId);
             if (!comic) return;
 
-            // Get the next episode number
-            const episodeNumber = comic.episodes ? comic.episodes.length + 1 : 1;
-            
-            // Fetch images from storage for this episode
-            const images = await fetchEpisodeImages(comic.title, episodeNumber);
-            
+            const chapterNumber = comic.episodes ? comic.episodes.length + 1 : 1;
+            const images = await fetchChapterImages(comic.title, chapterNumber);
+
             if (images.length === 0) {
-                alert("No images found for this episode in storage");
+                alert("No images found for this chapter in storage");
                 return;
             }
 
-            // Create episode document with padded number format (episode01, episode02, etc.)
-            const paddedNumber = String(episodeNumber).padStart(2, '0');
-            const episodeRef = doc(db, `comics/${selectedComicId}/episodes`, `episode${paddedNumber}`);
-            await setDoc(episodeRef, {
-                number: episodeNumber,
-                title: episodeTitle,
+            const paddedNumber = String(chapterNumber).padStart(2, '0');
+            const chapterRef = doc(db, `comics/${selectedComicId}/episodes`, `chapter${paddedNumber}`);
+            await setDoc(chapterRef, {
+                number: chapterNumber,
+                title: chapterTitle,
                 previewImage: images[0],
                 images: images
             });
 
-            // Refresh comics data
             fetchComics();
-            
-            // Reset states
-            setIsCreatingEpisode(false);
-            setEpisodeTitle("");
+            setIsCreatingChapter(false);
+            setChapterTitle("");
             setSelectedComicId(null);
-            
-            alert("Episode created successfully!");
+            alert("Chapter created successfully!");
         } catch (error) {
-            console.error("Error creating episode:", error);
-            alert("Failed to create episode");
+            console.error("Error creating chapter:", error);
+            alert("Failed to create chapter");
         }
     };
 
@@ -145,11 +137,46 @@ const Dashboard = () => {
 
     const toggleComic = (id) => {
         setExpandedComic(expandedComic === id ? null : id);
-        setExpandedEpisode(null);
+        setExpandedChapter(null);
     };
 
-    const toggleEpisode = (id) => {
-        setExpandedEpisode(expandedEpisode === id ? null : id);
+    const toggleChapter = (id) => {
+        setExpandedChapter(expandedChapter === id ? null : id);
+    };
+
+    const handleUploadFolder = async (e, comic) => {
+        const files = Array.from(e.target.files);
+        if (files.length === 0) return;
+    
+        try {
+            const nextChapterNumber = (comic.episodes ? comic.episodes.length : 0) + 1;
+            const paddedNumber = String(nextChapterNumber).padStart(2, "0");
+            const uploadPromises = [];
+    
+            for (const file of files) {
+                // Use the existing comic title in the path without creating a new folder
+                const storagePath = `${comic.title}/Chapter ${paddedNumber}/${file.name}`;
+                const fileRef = ref(storage, storagePath);
+                uploadPromises.push(uploadBytesResumable(fileRef, file));
+            }
+    
+            await Promise.all(uploadPromises);
+            alert("Files uploaded successfully to existing comic folder!");
+    
+            const images = await fetchChapterImages(comic.title, nextChapterNumber);
+            const chapterRef = doc(db, `comics/${comic.id}/episodes`, `chapter${paddedNumber}`);
+            await setDoc(chapterRef, {
+                number: nextChapterNumber,
+                title: `Chapter ${nextChapterNumber}`,
+                previewImage: images[0],
+                images: images
+            });
+    
+            fetchComics();
+        } catch (error) {
+            console.error("Error uploading files:", error);
+            alert("Failed to upload files to existing comic folder");
+        }
     };
 
     return (
@@ -173,7 +200,7 @@ const Dashboard = () => {
             </div>
 
             <div className="firestore-view">
-                <h3>Firestore Comics & Episodes</h3>
+                <h3>Firestore Comics & Chapters</h3>
                 {comicsData.map((comic) => (
                     <div key={comic.id} className="accordion">
                         <div className="accordion-header" onClick={() => toggleComic(comic.id)}>
@@ -187,14 +214,27 @@ const Dashboard = () => {
                                         <p><strong>Author:</strong> {comic.author}</p>
                                         <p><strong>Genres:</strong> {comic.genre.join(", ")}</p>
                                         <button 
-                                            className="create-episode-btn"
+                                            className="create-chapter-btn"
                                             onClick={(e) => {
                                                 e.stopPropagation();
-                                                handleCreateEpisode(comic.id, comic.title);
+                                                handleCreateChapter(comic.id, comic.title);
                                             }}
                                         >
-                                            ➕ Create Episode
+                                            ➕ Create Chapter
                                         </button>
+
+                                        <label className="upload-folder-btn">
+                                            📁 Add New Chapter (Upload Folder)
+                                            <input
+                                                type="file"
+                                                webkitdirectory="true"
+                                                mozdirectory="true"
+                                                directory=""
+                                                multiple
+                                                onChange={(e) => handleUploadFolder(e, comic)}
+                                                style={{ display: "none" }}
+                                            />
+                                        </label>
                                     </div>
                                 </div>
 
@@ -202,35 +242,35 @@ const Dashboard = () => {
                                     <h4>Banner Image:</h4>
                                     <img src={comic.heroLandScapeImage} alt="Banner" className="hero-image" />
                                 </div>
-                                
-                                {isCreatingEpisode && selectedComicId === comic.id && (
-                                    <div className="create-episode-form">
+
+                                {isCreatingChapter && selectedComicId === comic.id && (
+                                    <div className="create-chapter-form">
                                         <input
                                             type="text"
-                                            value={episodeTitle}
-                                            onChange={(e) => setEpisodeTitle(e.target.value)}
-                                            placeholder="Enter episode title"
-                                            className="episode-title-input"
+                                            value={chapterTitle}
+                                            onChange={(e) => setChapterTitle(e.target.value)}
+                                            placeholder="Enter chapter title"
+                                            className="chapter-title-input"
                                         />
-                                        <button onClick={handleSubmitEpisode} className="submit-episode-btn">
-                                            Create Episode
+                                        <button onClick={handleSubmitChapter} className="submit-chapter-btn">
+                                            Create Chapter
                                         </button>
                                     </div>
                                 )}
 
-                                <div className="episodes-list">
-                                    <h4>Episodes:</h4>
+                                <div className="chapters-list">
+                                    <h4>Chapters:</h4>
                                     {comic.episodes
                                         .sort((a, b) => a.number - b.number)
-                                        .map((episode) => (
-                                        <div key={episode.id} className="episode-item">
-                                            <div className="episode-header" onClick={() => toggleEpisode(episode.id)}>
-                                                <strong>Episode {episode.number}</strong> - {episode.title}
+                                        .map((chapter) => (
+                                        <div key={chapter.id} className="chapter-item">
+                                            <div className="chapter-header" onClick={() => toggleChapter(chapter.id)}>
+                                                <strong>Chapter {chapter.number}</strong> - {chapter.title}
                                             </div>
-                                            {expandedEpisode === episode.id && (
-                                                <div className="episode-details">
-                                                    <img src={episode.previewImage} alt="Preview" className="episode-preview" />
-                                                    <p><strong>Total Images:</strong> {episode.images.length}</p>
+                                            {expandedChapter === chapter.id && (
+                                                <div className="chapter-details">
+                                                    <img src={chapter.previewImage} alt="Preview" className="chapter-preview" />
+                                                    <p><strong>Total Images:</strong> {chapter.images.length}</p>
                                                 </div>
                                             )}
                                         </div>

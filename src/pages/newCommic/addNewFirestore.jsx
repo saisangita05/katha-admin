@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { collection, addDoc, doc, setDoc } from "firebase/firestore";
+import { setDoc, doc } from "firebase/firestore";
 import { db } from "../../firebase";
 import { useLocation, useNavigate } from "react-router-dom";
 
@@ -62,9 +62,14 @@ const AddNewComicsFirestore = () => {
         };
 
         try {
-            await setDoc(doc(db, "comics", comicName), data);
-            alert("📚 Comic metadata added to Firestore!");
-            navigate("/");
+            // Ensure comicName is valid and unique in Firestore.
+            if (comicName) {
+                await setDoc(doc(db, "comics", comicName), data);
+                alert("📚 Comic metadata added to Firestore!");
+                navigate("/");
+            } else {
+                alert("Comic name is missing. Please check your input.");
+            }
         } catch (error) {
             console.error("Error adding document:", error);
             alert("❌ Failed to upload comic metadata.");
